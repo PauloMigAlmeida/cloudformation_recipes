@@ -469,7 +469,7 @@
                   "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
                   "action=/opt/aws/bin/cfn-init -v ",
                   "         --stack ", { "Ref" : "AWS::StackName" },
-                  "         --resource LaunchConfig ",
+                  "         --resource WebTierInstanceLaunchConfig ",
                   "         --region ", { "Ref" : "AWS::Region" }, "\n",
                   "runas=root\n"
                 ]]}
