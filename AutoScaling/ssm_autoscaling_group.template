@@ -35,8 +35,7 @@
       "Type": "String",
       "MinLength": "6",
       "MaxLength": "70",
-      "AllowedPattern" : "[_A-Za-z0-9-\\+]+(\\.[_A-Za-z0-9-]+)*@[A-Za-z0-9-]+(\\.[A-Za-z0-9]+)*(\\.[A-Za-z]{2,})",
-      "Default" : "mpaulo@amazon.com"
+      "AllowedPattern" : "[_A-Za-z0-9-\\+]+(\\.[_A-Za-z0-9-]+)*@[A-Za-z0-9-]+(\\.[A-Za-z0-9]+)*(\\.[A-Za-z]{2,})"
     },
     "WebTierAutoScalingType": {
       "Description" : "WebServer Auto Scaling type",
