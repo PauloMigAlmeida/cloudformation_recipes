@@ -23,13 +23,20 @@
       "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
       "ConstraintDescription": "Must be a valid IP CIDR range of the form x.x.x.x/x"
     },
-    "InstanceDesiredCapacity" : {
-      "Description" : "The amount of instances in the web tier",
+    "SlaveInstanceDesiredCapacity" : {
+      "Description" : "The amount of jmeter slave instances",
       "Type": "Number",
       "MinValue": "1",
       "MaxValue": "10",
       "Default": "1"
-    }
+    },
+    "SNSNotificationEmail" :{
+      "Description": "The email address you want to receive a notification when this job finishes with the output report",
+      "Type": "String",
+      "MinLength": "6",
+      "MaxLength": "70",
+      "AllowedPattern" : "[_A-Za-z0-9-\\+]+(\\.[_A-Za-z0-9-]+)*@[A-Za-z0-9-]+(\\.[A-Za-z0-9]+)*(\\.[A-Za-z]{2,})"
+    },
   },
   "Mappings": {
     "SubnetConfig": {
@@ -342,6 +349,65 @@
         "SecurityGroupEgress": []
       }
     },
+    "JMeterOutputFilesBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "JMeter"
+          }
+        ]
+      },
+      "DeletionPolicy" : "Retain"
+    },
+    "SNSNotificationTopic": {
+      "Type" : "AWS::SNS::Topic",
+      "Properties" : {
+        "DisplayName" : { "Ref" : "AWS::StackName" },
+        "Subscription" : [ {
+          "Endpoint" : { "Ref": "SNSNotificationEmail" },
+          "Protocol" : "email"
+        }],
+        "TopicName" : { "Ref" : "AWS::StackName" }
+      }
+    },
+    "InstancePolicy": {
+      "Type" : "AWS::IAM::ManagedPolicy",
+      "Properties" : {
+        "Description": "instance_policy",
+        "PolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:PutObject",
+                "s3:PutObjectAcl"
+              ],
+              "Resource": [
+                {
+                  "Fn::Sub" : "arn:aws:s3:::${JMeterOutputFilesBucket}/*"
+                }
+              ]
+            },
+            {
+              "Effect":"Allow",
+              "Action":"sns:Publish",
+              "Resource": { "Ref": "SNSNotificationTopic" }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "cloudformation:DeleteStack"
+              ],
+              "Resource": "*"
+            }
+          ]
+        }
+      },
+      "DependsOn": ["JMeterOutputFilesBucket", "SNSNotificationTopic"]
+    },
     "BasicRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
@@ -349,8 +415,9 @@
           "Version" : "2012-10-17",
           "Statement": [ {"Effect": "Allow", "Principal": {"Service": [ "ec2.amazonaws.com" ]}, "Action": [ "sts:AssumeRole" ]}]
         },
-        "ManagedPolicyArns": []
-      }
+        "ManagedPolicyArns": [{ "Ref": "InstancePolicy" }]
+      },
+      "DependsOn": [ "InstancePolicy"]
     },
     "ListSlaveInstancesExecutionRole": {
       "Type": "AWS::IAM::Role",
@@ -361,13 +428,26 @@
         },
         "Path": "/",
         "Policies": [{
-          "PolicyName": "root",
+          "PolicyName" : "ListSlaveInstancesExecutionPolicy",
           "PolicyDocument": {
             "Version": "2012-10-17",
             "Statement": [{ "Effect": "Allow", "Action": ["logs:*"], "Resource": "arn:aws:logs:*:*:*" }]
           }
         }],
         "ManagedPolicyArns": ["arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess"]
+      }
+    },
+    "ListSlaveInstancesLambda" : {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Handler": "index.handler",
+        "Role": { "Fn::GetAtt" : ["ListSlaveInstancesExecutionRole", "Arn"] },
+        "Code": {
+          "S3Bucket": {"Fn::Sub": "cloudformation-recipes-${AWS::Region}"},
+          "S3Key": "customresource_listprivateips.zip"
+        },
+        "Runtime": "python2.7",
+        "Timeout": "10"
       }
     },
     "BasicInstanceProfile": {
@@ -380,10 +460,10 @@
       },
       "DependsOn": ["BasicRole"]
     },
-    "InstanceLaunchConfig": {
+    "SlaveInstanceLaunchConfig": {
       "Type": "AWS::AutoScaling::LaunchConfiguration",
       "Metadata" : {
-        "Comment" : "Install jmeter",
+        "Comment" : "Install jmeter in slave mode",
         "AWS::CloudFormation::Init" : {
           "config" : {
             "files" : {
@@ -404,20 +484,22 @@
                   "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
                   "action=/opt/aws/bin/cfn-init -v ",
                   "         --stack ", { "Ref" : "AWS::StackName" },
-                  "         --resource InstanceLaunchConfig ",
+                  "         --resource SlaveInstanceLaunchConfig ",
                   "         --region ", { "Ref" : "AWS::Region" }, "\n",
                   "runas=root\n"
                 ]]}
               },
               "/home/ec2-user/install_jmeter.sh" : {
-                "content": { "Fn::Join" : ["", [
-                  "#!/bin/bash -xe\n",
-                  "cd /tmp\n",
-                  "wget -O apache-jmeter-3.1.tgz.md5 https://www.apache.org/dist/jmeter/binaries/apache-jmeter-3.1.tgz.md5\n",
-                  "wget -O apache-jmeter-3.1.tgz http://www-us.apache.org/dist/jmeter/binaries/apache-jmeter-3.1.tgz\n",
-                  "md5sum -c apache-jmeter-3.1.tgz.md5\n",
-                  "tar zxvf apache-jmeter-3.1.tgz -C /home/ec2-user/\n",
-                  "rm -f apache-jmeter-3.1.tgz.md5 apache-jmeter-3.1.tgz\n"
+                "content": { "Fn::Join" : ["\n", [
+                  "#!/bin/bash -xe",
+                  "cd /tmp",
+                  "wget -O apache-jmeter-3.1.tgz.md5 https://www.apache.org/dist/jmeter/binaries/apache-jmeter-3.1.tgz.md5",
+                  "wget -O apache-jmeter-3.1.tgz http://www-us.apache.org/dist/jmeter/binaries/apache-jmeter-3.1.tgz",
+                  "md5sum -c apache-jmeter-3.1.tgz.md5",
+                  "tar zxvf apache-jmeter-3.1.tgz -C /home/ec2-user/",
+                  "rm -f apache-jmeter-3.1.tgz.md5 apache-jmeter-3.1.tgz",
+                  "cd /home/ec2-user/apache-jmeter-3.1/bin",
+                  "sed -i '/#server\\.rmi\\.localport\\=\\d*/s/.*/server.rmi.localport=40000/' jmeter.properties"
                 ]]}
               }
             },
@@ -455,17 +537,19 @@
 
           "/opt/aws/bin/cfn-init -v ",
           "         --stack ", { "Ref" : "AWS::StackName" },
-          "         --resource InstanceLaunchConfig ",
+          "         --resource SlaveInstanceLaunchConfig ",
           "         --region ", { "Ref" : "AWS::Region" }, "\n",
 
           "/opt/aws/bin/cfn-signal -e $? ",
           "         --stack ", { "Ref" : "AWS::StackName" },
-          "         --resource InstanceFleet ",
-          "         --region ", { "Ref" : "AWS::Region" }, "\n"
+          "         --resource SlaveInstanceFleet ",
+          "         --region ", { "Ref" : "AWS::Region" }, "\n",
+
+          "nohup /home/ec2-user/apache-jmeter-3.1/bin/jmeter-server & \n"
         ]]}}
       }
     },
-    "InstanceFleet": {
+    "SlaveInstanceFleet": {
       "Type": "AWS::AutoScaling::AutoScalingGroup",
       "DependsOn": "PublicRoute",
       "Properties": {
@@ -492,12 +576,12 @@
           }
         ],
         "LaunchConfigurationName": {
-          "Ref": "InstanceLaunchConfig"
+          "Ref": "SlaveInstanceLaunchConfig"
         },
-        "MinSize": { "Ref": "InstanceDesiredCapacity" },
+        "MinSize": { "Ref": "SlaveInstanceDesiredCapacity" },
         "MaxSize": "10",
         "DesiredCapacity": {
-          "Ref": "InstanceDesiredCapacity"
+          "Ref": "SlaveInstanceDesiredCapacity"
         },
         "HealthCheckType" : "EC2",
         "HealthCheckGracePeriod": 300,
@@ -512,7 +596,7 @@
       "CreationPolicy" : {
         "ResourceSignal" : {
           "Timeout" : "PT5M",
-          "Count"   : "1"
+          "Count"   : { "Ref": "SlaveInstanceDesiredCapacity" }
         }
       },
       "UpdatePolicy": {
@@ -523,38 +607,158 @@
         }
       }
     },
-    "ListSlaveInstances" : {
-        "Type": "AWS::Lambda::Function",
-        "Properties": {
-          "Handler": "index.lambda_handler",
-          "Role": { "Fn::GetAtt" : ["ListSlaveInstancesExecutionRole", "Arn"] },
-          "Code": {
-            "ZipFile":  { "Fn::Join": ["\n", [
-              "import boto3",
-              { "Fn::Sub": "client = boto3.client('ec2', region_name='${AWS::Region}')"},
-              "def lambda_handler(event, context):",
-              "    privates_ips = []",
-              "    list = client.describe_instances(",
-              "        Filters = [",
-              "            {'Name':'tag:Name', 'Values':['JMeter :: Instance - Slave']}",
-              "        ]",
-              "    )",
-              "    for reservation in list['Reservations']:",
-              "        instances = reservation['Instances']",
-              "        for instance in instances:",
-              "            privates_ips.append(instance['PrivateIpAddress'])",
-              "    return ','.join(privates_ips)"
-            ]]}
-          },
-          "Runtime": "python2.7",
-          "Timeout": "10"
+    "SlaveInstancesPrivateIpsInfo": {
+      "Type": "Custom::SlaveInstancesPrivateIpsInfo",
+      "DependsOn": ["ListSlaveInstancesLambda", "SlaveInstanceFleet"],
+      "Properties": {
+        "ServiceToken": { "Fn::GetAtt" : ["ListSlaveInstancesLambda", "Arn"] }
+      }
+    },
+    "MasterInstanceLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "Comment" : "Install jmeter in master mode",
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource MasterInstanceLaunchConfig ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              },
+              "/home/ec2-user/install_jmeter.sh" : {
+                "content": { "Fn::Join" : ["\n", [
+                  "#!/bin/bash -xe",
+                  "cd /tmp",
+                  "wget -O apache-jmeter-3.1.tgz.md5 https://www.apache.org/dist/jmeter/binaries/apache-jmeter-3.1.tgz.md5",
+                  "wget -O apache-jmeter-3.1.tgz http://www-us.apache.org/dist/jmeter/binaries/apache-jmeter-3.1.tgz",
+                  "md5sum -c apache-jmeter-3.1.tgz.md5",
+                  "tar zxvf apache-jmeter-3.1.tgz -C /home/ec2-user/",
+                  "rm -f apache-jmeter-3.1.tgz.md5 apache-jmeter-3.1.tgz",
+                  "cd /home/ec2-user/apache-jmeter-3.1/bin",
+                  "sed -i '/#client\\.rmi\\.localport\\=\\d*/s/.*/client.rmi.localport=40000/' jmeter.properties",
+                  "sed -i '/#client\\.continue_on_fail\\=\\w*/s/.*/#client.continue_on_fail=false/' jmeter.properties",
+                  "sed -i '/#summariser\\.interval\\=\\d*/s/.*/summariser.interval=30/' jmeter.properties",
+                  "sed -i '/#summariser\\.log\\=\\d*/s/.*/summariser.log=true/' jmeter.properties",
+                  "sed -i '/#summariser\\.out\\=\\d*/s/.*/summariser.out=true/' jmeter.properties"
+                ]]}
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
+                  "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"]}
+              }
+            },
+            "commands": {
+              "install_dep": {
+                "command" : {
+                  "Fn::Join" : ["; ", [
+                    "cd /tmp",
+                    "/bin/sh /home/ec2-user/install_jmeter.sh"
+                  ]]
+                },
+                "ignoreErrors" : "false"
+              }
+            }
+          }
         }
+      },
+      "Properties": {
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+        "InstanceType"   : { "Ref" : "InstanceType" },
+        "SecurityGroups" : [ { "Ref": "InstanceSecurityGroup" }],
+        "KeyName"        : { "Ref" : "KeyName" },
+        "AssociatePublicIpAddress": "true",
+        "IamInstanceProfile": { "Ref": "BasicInstanceProfile" },
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -xe\n",
+          "yum update -y aws-cfn-bootstrap\n",
+
+          "/opt/aws/bin/cfn-init -v ",
+          "         --stack ", { "Ref" : "AWS::StackName" },
+          "         --resource MasterInstanceLaunchConfig ",
+          "         --region ", { "Ref" : "AWS::Region" }, "\n",
+
+          "/opt/aws/bin/cfn-signal -e $? ",
+          "         --stack ", { "Ref" : "AWS::StackName" },
+          "         --resource MasterInstanceFleet ",
+          "         --region ", { "Ref" : "AWS::Region" }, "\n"
+        ]]}}
+      }
+    },
+    "MasterInstanceFleet": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "DependsOn": ["PublicRoute", "SlaveInstancesPrivateIpsInfo"],
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::GetAtt": [
+              "InstanceSubnet1",
+              "AvailabilityZone"
+            ]
+          },
+          {
+            "Fn::GetAtt": [
+              "InstanceSubnet2",
+              "AvailabilityZone"
+            ]
+          }
+        ],
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "InstanceSubnet1"
+          },
+          {
+            "Ref": "InstanceSubnet2"
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "MasterInstanceLaunchConfig"
+        },
+        "MinSize": "1",
+        "MaxSize": "1",
+        "DesiredCapacity": "1",
+        "HealthCheckType" : "EC2",
+        "HealthCheckGracePeriod": 300,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "JMeter :: Instance - Master",
+            "PropagateAtLaunch": "true"
+          }
+        ]
+      },
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT5M",
+          "Count"   : 1
+        }
+      }
     }
   },
   "Outputs" : {
-    "BackendUrl" : {
-      "Description" : "JMeter addresses",
-      "Value" : "Ha!"
+    "PrivateIps" : {
+      "Description" : "JMeter slave addresses",
+      "Value" : { "Fn::GetAtt": [ "SlaveInstancesPrivateIpsInfo", "PrivateIpAddresses" ] }
     }
   }
 }
