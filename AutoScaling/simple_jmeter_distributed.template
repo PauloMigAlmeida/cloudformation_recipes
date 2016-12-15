@@ -37,6 +37,11 @@
       "MaxLength": "70",
       "AllowedPattern" : "[_A-Za-z0-9-\\+]+(\\.[_A-Za-z0-9-]+)*@[A-Za-z0-9-]+(\\.[A-Za-z0-9]+)*(\\.[A-Za-z]{2,})"
     },
+    "InputAddressJMXFile" :{
+      "Description": "A public accessible url where a JMX file can be retrieve from. Ex.: http(s)://myhost/myfile.jmx",
+      "Type": "String",
+      "MinLength": "6"
+    }
   },
   "Mappings": {
     "SubnetConfig": {
@@ -701,7 +706,15 @@
           "/opt/aws/bin/cfn-signal -e $? ",
           "         --stack ", { "Ref" : "AWS::StackName" },
           "         --resource MasterInstanceFleet ",
-          "         --region ", { "Ref" : "AWS::Region" }, "\n"
+          "         --region ", { "Ref" : "AWS::Region" }, "\n",
+
+          "cd /home/ec2-user/\n",
+          { "Fn::Sub" : "wget ${InputAddressJMXFile} -O job.jmx\n"},
+          { "Fn::Sub" : "apache-jmeter-3.1/bin/jmeter.sh -LDEBUG -n -t job.jmx -R ${SlaveInstancesPrivateIpsInfo.PrivateIpAddresses} -l output.jtl > command_output.txt\n"},
+          { "Fn::Sub" : "aws sns publish --topic-arn \"${SNSNotificationTopic}\" --message file://$(pwd)/command_output.txt --region ${AWS::Region}\n"},
+          { "Fn::Sub" : "aws s3 cp output.jtl s3://${JMeterOutputFilesBucket}/output.jtl\n"},
+          { "Fn::Sub" : "aws cloudformation delete-stack --stack-name ${AWS::StackName} --region ${AWS::Region}\n"}
+
         ]]}}
       }
     },
