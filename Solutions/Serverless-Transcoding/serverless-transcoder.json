@@ -1,0 +1,853 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "",
+    "Metadata": {},
+    "Parameters": {
+        "ServicePrefix": {
+            "Description": "Set the prefix to yours services",
+            "Type": "String",
+            "Default": "servicePrefix"
+        },
+        "UserMail": {
+            "Description": "User e-mail subscriber",
+            "Type": "String",
+            "Default": "person@company.com"
+        },
+        "PipelineName": {
+            "Description": "Name of the ETS Pipeline",
+            "Type": "String",
+            "Default": "ETS-PipelineName"
+        },
+        "PresetName": {
+            "Description": "Select the name of the ETS Preset (Default is MP4 720p)",
+            "Type": "String",
+            "Default": "System preset: Generic 720p"
+        }
+    },
+    "Mappings": {},
+    "Conditions": {},
+    "Resources": {
+        "inputS3Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "AccessControl": "Private",
+                "BucketName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "input"
+                        ]
+                    ]
+                },
+                "NotificationConfiguration": {
+                    "LambdaConfigurations": [
+                        {
+                            "Event": "s3:ObjectCreated:Put",
+                            "Function": {
+                                "Fn::GetAtt": [
+                                    "lambdaS3ToETS",
+                                    "Arn"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            "DependsOn": "S3ToETSPermission"
+        },
+        "s3BucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+                "Bucket": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "output"
+                        ]
+                    ]
+                },
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AddPerm",
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:GetObject",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:s3:::",
+                                        {
+                                            "Fn::Join": [
+                                                "-",
+                                                [
+                                                    {
+                                                        "Ref": "ServicePrefix"
+                                                    },
+                                                    "output"
+                                                ]
+                                            ]
+                                        },
+                                        "/*"
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            "DependsOn": "outputS3Bucket"
+        },
+        "outputS3Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "AccessControl": "Private",
+                "BucketName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "output"
+                        ]
+                    ]
+                },
+                "NotificationConfiguration": {
+                    "LambdaConfigurations": [
+                        {
+                            "Event": "s3:ObjectCreated:Put",
+                            "Function": {
+                                "Fn::GetAtt": [
+                                    "lambdaS3ToDsbAndSNS",
+                                    "Arn"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "WebsiteConfiguration": {
+                    "IndexDocument": "index.html",
+                    "ErrorDocument": "error.html"
+                }
+            },
+            "DependsOn": "S3ToDsbAndSNSPermission"
+        },
+        "S3ToETSPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "Action": "lambda:invokeFunction",
+                "FunctionName": {
+                    "Fn::GetAtt": [
+                        "lambdaS3ToETS",
+                        "Arn"
+                    ]
+                },
+                "Principal": "s3.amazonaws.com"
+            },
+            "DependsOn": "lambdaS3ToETS"
+        },
+        "S3ToDsbAndSNSPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "Action": "lambda:invokeFunction",
+                "FunctionName": {
+                    "Fn::GetAtt": [
+                        "lambdaS3ToDsbAndSNS",
+                        "Arn"
+                    ]
+                },
+                "Principal": "s3.amazonaws.com"
+            },
+            "DependsOn": "lambdaS3ToDsbAndSNS"
+        },
+        "PolicyS3ETSLambda": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "S3ETSPolicy"
+                        ]
+                    ]
+                },
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "elastictranscoder:*",
+                                "cloudfront:*",
+                                "s3:List*",
+                                "s3:Put*",
+                                "s3:Get*",
+                                "s3:*MultipartUpload*",
+                                "iam:CreateRole",
+                                "iam:GetRolePolicy",
+                                "iam:PassRole",
+                                "iam:PutRolePolicy",
+                                "iam:List*",
+                                "sns:CreateTopic",
+                                "sns:List*",
+                                "sns:Publish"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": "*"
+                        }
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "roleS3ETSLambda"
+                    }
+                ]
+            },
+            "DependsOn": "roleS3ETSLambda"
+        },
+        "roleS3ETSLambda": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com",
+                                    "elastictranscoder.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "PolicyS3DynamoSNSLambda": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "dynamoSNSPolicy"
+                        ]
+                    ]
+                },
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "dynamodb:*",
+                                "cloudwatch:DeleteAlarms",
+                                "cloudwatch:DescribeAlarmHistory",
+                                "cloudwatch:DescribeAlarms",
+                                "cloudwatch:DescribeAlarmsForMetric",
+                                "cloudwatch:GetMetricStatistics",
+                                "cloudwatch:ListMetrics",
+                                "cloudwatch:PutMetricAlarm",
+                                "datapipeline:ActivatePipeline",
+                                "datapipeline:CreatePipeline",
+                                "datapipeline:DeletePipeline",
+                                "datapipeline:DescribeObjects",
+                                "datapipeline:DescribePipelines",
+                                "datapipeline:GetPipelineDefinition",
+                                "datapipeline:ListPipelines",
+                                "datapipeline:PutPipelineDefinition",
+                                "datapipeline:QueryObjects",
+                                "iam:ListRoles",
+                                "sns:CreateTopic",
+                                "sns:DeleteTopic",
+                                "sns:ListSubscriptions",
+                                "sns:ListSubscriptionsByTopic",
+                                "sns:ListTopics",
+                                "sns:Publish",
+                                "sns:Subscribe",
+                                "sns:Unsubscribe",
+                                "sns:SetTopicAttributes",
+                                "lambda:CreateFunction",
+                                "lambda:ListFunctions",
+                                "lambda:ListEventSourceMappings",
+                                "lambda:CreateEventSourceMapping",
+                                "lambda:DeleteEventSourceMapping",
+                                "lambda:GetFunctionConfiguration",
+                                "lambda:DeleteFunction"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": "*"
+                        }
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "roleS3DynamoSNSLambda"
+                    }
+                ]
+            },
+            "DependsOn": "roleS3DynamoSNSLambda"
+        },
+        "roleS3DynamoSNSLambda": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "lambdaS3ToETS": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "from __future__ import print_function",
+                                            "import json",
+                                            "import boto3",
+                                            "import urllib",
+                                            "import time",
+                                            "##### Iniciando Libs",
+                                            "s3 = boto3.client('s3')",
+                                            "etranscoder = boto3.client('elastictranscoder')",
+                                            "##### Id da Pipeline",
+                                            "listPipeline = etranscoder.list_pipelines(",
+                                            "    Ascending= 'true'",
+                                            ")",
+                                            "for pipeline in listPipeline['Pipelines']:",
+                                            "    if pipeline['Name'] == '"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Ref": "PipelineName"
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "':",
+                                            "        print('Found the Pipeline to use: ' + pipeline['Name'])",
+                                            "        pipelineId = pipeline['Id']",
+                                            "##### Id do Preset",
+                                            "listPreset = etranscoder.list_presets(",
+                                            "    Ascending= 'true'",
+                                            ")",
+                                            "for preset in listPreset['Presets']:",
+                                            "    if preset['Name'] == '"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Ref": "PresetName"
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "':",
+                                            "        print('Found the Preset to use: ' + preset['Id'])",
+                                            "        presetId = preset['Id']",
+                                            "def lambda_handler(event, context):",
+                                            "    #print('Received event: ' + json.dumps(event, indent=2))",
+                                            "    # Get the object from the event and show its content type",
+                                            "    bucket = event['Records'][0]['s3']['bucket']['name']",
+                                            "    key = urllib.unquote_plus(event['Records'][0]['s3']['object']['key']).decode('utf8')",
+                                            "    try:",
+                                            "        ##### Obtendo resposta do Evento",
+                                            "        response = s3.get_object(Bucket=bucket, Key=key)",
+                                            "        ##### Realizando o Transcoding do Video",
+                                            "        transcoder = etranscoder.create_job(",
+                                            "            PipelineId = pipelineId,",
+                                            "            Input={",
+                                            "                'Key': key",
+                                            "            },",
+                                            "            Output={",
+                                            "                'Key': key,",
+                                            "                'PresetId': presetId",
+                                            "            }",
+                                            "        )",
+                                            "        print('CONTENT TYPE: ' + response['ContentType'])",
+                                            "        return response['ContentType']",
+                                            "    except Exception as e:",
+                                            "        print(e)",
+                                            "        print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))",
+                                            "        raise e"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        ]
+                    }
+                },
+                "Description": "Function to create job into ETS",
+                "FunctionName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "S3ToETS"
+                        ]
+                    ]
+                },
+                "Handler": "index.lambda_handler",
+                "MemorySize": 128,
+                "Role": {
+                    "Fn::GetAtt": [
+                        "roleS3ETSLambda",
+                        "Arn"
+                    ]
+                },
+                "Runtime": "python2.7",
+                "Timeout": 60
+            },
+            "DependsOn": "PolicyS3ETSLambda"
+        },
+        "lambdaETSCustom": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "from __future__ import print_function",
+                                            "import json",
+                                            "import boto3",
+                                            "import urllib2",
+                                            "import urllib",
+                                            "from urlparse import urlparse",
+                                            "import httplib",
+                                            "##### Iniciando Libs",
+                                            "etranscoder = boto3.client('elastictranscoder')",
+                                            "##### Buckets",
+                                            "input_bucket = '"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "-",
+                                        [
+                                            {
+                                                "Ref": "ServicePrefix"
+                                            },
+                                            "input"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "'",
+                                            "output_bucket = '"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "-",
+                                        [
+                                            {
+                                                "Ref": "ServicePrefix"
+                                            },
+                                            "output"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "'",
+                                            "##### Pipeline Name",
+                                            "pipeline_name = '"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Ref": "PipelineName"
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "'",
+                                            "def lambda_handler(event, context):",
+                                            "    print('Received event: ' + json.dumps(event, indent=2))",
+                                            "    responseStatus = 'SUCCESS'",
+                                            "    responseData = {}",
+                                            "    if event['RequestType'] == 'Create':",
+                                            "        responseData = {'Success': 'Test Passed.'}",
+                                            "        createPipeline = etranscoder.create_pipeline(",
+                                            "            Name = pipeline_name,",
+                                            "            InputBucket = input_bucket,",
+                                            "            OutputBucket = output_bucket,",
+                                            "            Role='"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::GetAtt": [
+                                        "roleS3ETSLambda",
+                                        "Arn"
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "'",
+                                            "        )",
+                                            "        print('Creating Pipeline ' + pipeline_name)",
+                                            "        sendResponse(event, context, responseStatus, responseData)",
+                                            "        return('SUCCESS')",
+                                            "    if event['RequestType'] == 'Delete':",
+                                            "        listPipeline = etranscoder.list_pipelines(",
+                                            "            Ascending= 'true'",
+                                            "        )",
+                                            "        print('Finding Pipeline to delete.')",
+                                            "        for pipeline in listPipeline['Pipelines']:",
+                                            "            if pipeline_name == pipeline['Name']:",
+                                            "                print('Found the Pipeline to delete: ' + pipeline['Name'])",
+                                            "                print('Deleting the PipelineID ' + pipeline['Id'])",
+                                            "                deltePipeline = etranscoder.delete_pipeline(",
+                                            "                Id = pipeline['Id']",
+                                            "                )",
+                                            "                print('Pipeline deleted ' + pipeline['Name'])",
+                                            "                responseData = {'Success': 'Test Passed.'}",
+                                            "                sendResponse(event, context, responseStatus, responseData)",
+                                            "                return('SUCCESS')",
+                                            "def sendResponse(event, context, responseStatus, responseData):",
+                                            "    responseBody = {'Status': responseStatus,",
+                                            "                    'Reason': 'See the details in CloudWatch Log Stream: ' + context.log_stream_name,",
+                                            "                    'PhysicalResourceId': context.log_stream_name,",
+                                            "                    'StackId': event['StackId'],",
+                                            "                    'RequestId': event['RequestId'],",
+                                            "                    'LogicalResourceId': event['LogicalResourceId'],",
+                                            "                    'Data': responseData}",
+                                            "    #print ('RESPONSE BODY: ' + json.dumps(responseBody, indent=2))",
+                                            "    o = urlparse(event['ResponseURL'])",
+                                            "    conn = httplib.HTTPConnection(o.netloc)",
+                                            "    conn.request('PUT', event['ResponseURL'], json.dumps(responseBody))",
+                                            "    resp = conn.getresponse()",
+                                            "    content = resp.read()",
+                                            "    print(content)"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        ]
+                    }
+                },
+                "Description": "Function to create custom resource ETS",
+                "FunctionName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "LambdaETSCustom"
+                        ]
+                    ]
+                },
+                "Handler": "index.lambda_handler",
+                "MemorySize": 128,
+                "Role": {
+                    "Fn::GetAtt": [
+                        "roleS3ETSLambda",
+                        "Arn"
+                    ]
+                },
+                "Runtime": "python2.7",
+                "Timeout": 60
+            },
+            "DependsOn": "outputS3Bucket"
+        },
+        "customLambdaETS": {
+            "Type": "Custom::CreateETS",
+            "Version": "1.0",
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "lambdaETSCustom",
+                        "Arn"
+                    ]
+                }
+            },
+            "DependsOn": "lambdaETSCustom"
+        },
+        "lambdaS3ToDsbAndSNS": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "from __future__ import print_function",
+                                            "import json",
+                                            "import urllib",
+                                            "import boto3",
+                                            "import time",
+                                            "print('Loading function')",
+                                            "##### Instanciando os servicos",
+                                            "s3 = boto3.client('s3')",
+                                            "dynamodb = boto3.resource('dynamodb')",
+                                            "sns = boto3.client('sns')",
+                                            "##### Acessando Tabela do DynamoDB",
+                                            "table = dynamodb.Table('"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Ref": "dynamodbVideos"
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "')",
+                                            "##### EndPoint do CloudFront",
+                                            "cloudfront = ('http://"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "-",
+                                        [
+                                            {
+                                                "Ref": "ServicePrefix"
+                                            },
+                                            "output"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            ".s3-website-"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Ref": "AWS::Region"
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            ".amazonaws.com/')",
+                                            "##### ARN do Topic do SNS",
+                                            "topicARN = ('"
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Ref": "snsTopicVideos"
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "\n",
+                                        [
+                                            "')",
+                                            "def lambda_handler(event, context):",
+                                            "    #print('Received event: ' + json.dumps(event, indent=2))",
+                                            "    # Get the object from the event and show its content type",
+                                            "    bucket = event['Records'][0]['s3']['bucket']['name']",
+                                            "    key = urllib.unquote_plus(event['Records'][0]['s3']['object']['key']).decode('utf8')",
+                                            "    try:",
+                                            "        ##### Obtendo resposta do Evento",
+                                            "        response = s3.get_object(Bucket=bucket, Key=key)",
+                                            "        ##### Inserindo no DynamoDB os dados do acesso ao video e Status.",
+                                            "        put_item_dynamo = table.put_item(",
+                                            "            Item = {",
+                                            "                'Name': key,",
+                                            "                'Info': response['ContentType'],",
+                                            "                'Status': '0',",
+                                            "                'VotosAFavor': 0,",
+                                            "                'VotosContra': 0,",
+                                            "                'Link': cloudfront + key",
+                                            "                }",
+                                            "        )",
+                                            "        ##### Enviando alerta de video disponivel.",
+                                            "        snsPublish = sns.publish(",
+                                            "            TopicArn = topicARN,",
+                                            "            Message = 'Novo video disponivel. Para acessar o video acessar o Link: '+ cloudfront + key,",
+                                            "            Subject = 'Demo Summit! Tem novidade ai.',",
+                                            "            MessageStructure = 'Raw',",
+                                            "        )",
+                                            "        print('CONTENT TYPE: ' + response['ContentType'])",
+                                            "        return response['ContentType']",
+                                            "    except Exception as e:",
+                                            "        print(e)",
+                                            "        print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))",
+                                            "        raise e"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        ]
+                    }
+                },
+                "Description": "Function to create insert data into DynamoDB and publish into SNS",
+                "FunctionName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "S3ToDdbAndSNS"
+                        ]
+                    ]
+                },
+                "Handler": "index.lambda_handler",
+                "MemorySize": 128,
+                "Role": {
+                    "Fn::GetAtt": [
+                        "roleS3DynamoSNSLambda",
+                        "Arn"
+                    ]
+                },
+                "Runtime": "python2.7",
+                "Timeout": 60
+            },
+            "DependsOn": "snsTopicVideos"
+        },
+        "snsTopicVideos": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "DisplayName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "videos-cf"
+                        ]
+                    ]
+                },
+                "Subscription": [
+                    {
+                        "Endpoint": {
+                            "Ref": "UserMail"
+                        },
+                        "Protocol": "email"
+                    }
+                ],
+                "TopicName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "videos-cf"
+                        ]
+                    ]
+                }
+            },
+            "DependsOn": "dynamodbVideos"
+        },
+        "dynamodbVideos": {
+            "Type": "AWS::DynamoDB::Table",
+            "Properties": {
+                "AttributeDefinitions": [
+                    {
+                        "AttributeName": "Name",
+                        "AttributeType": "S"
+                    }
+                ],
+                "KeySchema": [
+                    {
+                        "AttributeName": "Name",
+                        "KeyType": "HASH"
+                    }
+                ],
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 5,
+                    "WriteCapacityUnits": 5
+                },
+                "TableName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "ServicePrefix"
+                            },
+                            "videos-cf"
+                        ]
+                    ]
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "inputBucketName": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "inputS3Bucket",
+                    "DomainName"
+                ]
+            }
+        },
+        "outputBucketName": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "outputS3Bucket",
+                    "DomainName"
+                ]
+            }
+        }
+    }
+}
