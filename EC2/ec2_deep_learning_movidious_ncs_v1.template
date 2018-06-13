@@ -260,52 +260,6 @@
     },
     "Instance": {
       "Type": "AWS::EC2::Instance",
-      "Metadata" : {
-        "Comment" : "Install a simple application",
-        "AWS::CloudFormation::Init" : {
-          "config" : {
-            "packages" : {
-              "apt" : {
-                "unzip" : [],
-                "git" : []
-              }
-            },
-
-            "files" : {
-              "/etc/cfn/cfn-hup.conf" : {
-                "content" : { "Fn::Join" : ["", [
-                  "[main]\n",
-                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
-                  "region=", { "Ref" : "AWS::Region" }, "\n"
-                ]]},
-                "mode"    : "000400",
-                "owner"   : "root",
-                "group"   : "root"
-              },
-
-              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
-                "content": { "Fn::Join" : ["", [
-                  "[cfn-auto-reloader-hook]\n",
-                  "triggers=post.update\n",
-                  "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
-                  "action=/usr/local/bin/cfn-init -v ",
-                  "         --stack ", { "Ref" : "AWS::StackName" },
-                  "         --resource Instance ",
-                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
-                  "runas=root\n"
-                ]]}
-              }
-            },
-
-            "services" : {
-              "sysvinit" : {
-                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
-                "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"]}
-              }
-            }
-          }
-        }
-      },
       "Properties": {
         "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
           { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
