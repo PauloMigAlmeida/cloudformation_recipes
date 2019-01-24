@@ -41,7 +41,9 @@ function get_most_recent_caffe_training_file()
 
     local ESCAPED_TARGET_DIR=$(echo "$TARGET_DIR" | sed -e 's/[\/&]/\\&/g')
 
-    if ls -1 $TARGET_DIR*$EXTENSION > /dev/null; then
+    ls -1 $TARGET_DIR*$EXTENSION > /dev/null
+    retVal=$?
+    if [[ $retVal -ne 0 ]]; then
       echo $RESULT
     else
       echo $(ls -1 $TARGET_DIR*$EXTENSION | sed -e "s/$ESCAPED_TARGET_DIR//g" | sed 's/[^0-9]*//g' | sort -gr | head -1 | sed -e "s/^/$ESCAPED_TARGET_DIR/g" | sed -e "s/$/$EXTENSION/g")
