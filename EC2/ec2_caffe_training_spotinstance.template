@@ -1,0 +1,363 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Deploy an EC2 spot instance and prepares it to train using caffe ",
+  "Parameters" : {
+    "KeyName": {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "Can contain only ASCII characters."
+    },
+    "ImageId" : {
+      "Description" : "EC2 image id",
+      "Type" : "AWS::EC2::Image::Id",
+      "ConstraintDescription" : "Image Id containing your instance with Caffe and dataset ready to train"
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "p2.xlarge",
+      "AllowedValues" : [ "t2.nano", "t2.micro", "t2.small", "t2.medium", "t2.large","m3.medium", "m3.large", "m3.xlarge", "m3.2xlarge", "m4.large", "m4.xlarge", "m4.2xlarge", "m4.4xlarge", "m4.10xlarge", "c3.large", "c3.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge", "c4.large", "c4.xlarge", "c4.2xlarge", "c4.4xlarge", "c4.8xlarge", "r3.large", "r3.xlarge", "r3.2xlarge", "r3.4xlarge", "r3.8xlarge", "i2.xlarge", "i2.2xlarge", "i2.4xlarge", "i2.8xlarge", "d2.xlarge", "d2.2xlarge", "d2.4xlarge", "d2.8xlarge", "hi1.4xlarge", "hs1.8xlarge", "cr1.8xlarge", "cc2.8xlarge", "p2.xlarge", "p2.8xlarge", "p2.16xlarge", "p3.2xlarge", "p3.8xlarge", "p3.16xlarge", "c5.large", "c5.xlarge", "c5.2xlarge", "c5.4xlarge", "c5.9xlarge", "c5.18xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "InstanceVolumeSize" : {
+      "Description" : "Volume size in GB",
+      "Type": "Number",
+      "MinValue": "80",
+      "MaxValue": "16000",
+      "Default": "1000"
+    },
+    "SSHLocation" : {
+      "Description" : "The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "0.0.0.0/0",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "Must be a valid IP CIDR range of the form x.x.x.x/x"
+    },
+    "CaffeTrainingDir" : {
+      "Description" : "Caffe training directory",
+      "Type": "String"
+    },
+    "CaffeSolverPrototxtFile" : {
+      "Description" : "Caffe training solver.prototxt",
+      "Type": "String"
+    },
+    "SpotPrice" : {
+      "Description" : "Spot price you're willing to pay for the chosen instance type",
+      "Type": "Number",
+      "Default": "0.00"
+    }
+  },
+  "Mappings": {
+    "SubnetConfig": {
+      "VPC": {
+        "CIDR": "10.0.0.0/16"
+      },
+      "InstanceSubnet1": {
+        "CIDR": "10.0.0.0/24"
+      },
+      "InstanceSubnet2": {
+        "CIDR": "10.0.1.0/24"
+      }
+    }
+  },
+  "Resources":  {
+    "TrainedModelsBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy" : "Retain"
+    },
+    "VPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": {
+          "Fn::FindInMap": [
+            "SubnetConfig",
+            "VPC",
+            "CIDR"
+          ]
+        },
+        "EnableDnsSupport": "true",
+        "EnableDnsHostnames": "true",
+        "InstanceTenancy": "default",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "DL Spot Instance training"
+          }
+        ]
+      }
+    },
+    "InstanceSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "CidrBlock": {
+          "Fn::FindInMap": [
+            "SubnetConfig",
+            "InstanceSubnet1",
+            "CIDR"
+          ]
+        },
+        "AvailabilityZone" : {
+          "Fn::Select" : [
+            "0",
+            {
+              "Fn::GetAZs" : { "Ref" : "AWS::Region" }
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "DL Spot Instance training :: Public Subnet 1"
+          }
+        ]
+      }
+    },
+    "InstanceSubnet2": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "CidrBlock": {
+          "Fn::FindInMap": [
+            "SubnetConfig",
+            "InstanceSubnet2",
+            "CIDR"
+          ]
+        },
+        "AvailabilityZone" : {
+          "Fn::Select" : [
+            "1",
+            {
+              "Fn::GetAZs" : { "Ref" : "AWS::Region" }
+            }
+          ]
+        },
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "DL Spot Instance training :: Public Subnet 2"
+          }
+        ]
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "DL Spot Instance training"
+          }
+        ]
+      }
+    },
+    "GatewayToInternet": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "DL Spot Instance training"
+          }
+        ]
+      }
+    },
+    "PublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "GatewayToInternet",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "InstanceSubnet1RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "InstanceSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "InstanceSubnet2RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "InstanceSubnet2"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "InstanceSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Security Group with SSH access on port 22 from the specified CIDR block",
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp" : { "Ref" : "SSHLocation"}
+          }
+        ],
+        "SecurityGroupEgress": []
+      }
+    },
+    "BasicRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [ {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": [ "ec2.amazonaws.com" ]
+            },
+            "Action": [ "sts:AssumeRole" ]
+          } ]
+        },
+        "ManagedPolicyArns":[
+          "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+          "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+        ]
+      }
+    },
+    "BasicInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [ {
+          "Ref": "BasicRole"
+        } ]
+      },
+      "DependsOn": ["BasicRole"]
+    },
+    "LaunchConfig" : {
+       "Type" : "AWS::AutoScaling::LaunchConfiguration",
+       "Properties" : {
+          "KeyName" : { "Ref" : "KeyName" },
+          "ImageId" : { "Ref": "ImageId" },
+          "SpotPrice": { "Ref": "SpotPrice" },
+          "AssociatePublicIpAddress": "true",
+          "IamInstanceProfile": { "Ref": "BasicInstanceProfile" },
+          "SecurityGroups" : [ { "Ref" : "InstanceSecurityGroup" } ],
+          "InstanceType" : { "Ref" : "InstanceType" },
+          "BlockDeviceMappings" : [
+            {
+              "DeviceName" : "/dev/sda1",
+              "Ebs" : { "VolumeSize" : { "Ref": "InstanceVolumeSize" } }
+            }
+          ],
+          "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "cd /tmp/\n",
+            "curl https://s3.amazonaws.com/aws-cloudwatch/downloads/latest/awslogs-agent-setup.py -O\n",
+
+             "touch cwlogs.conf\n",
+             "echo \"[general]\" >> cwlogs.conf\n",
+             "echo \"state_file = /var/awslogs/state/agent-state\" >> cwlogs.conf\n\n",
+
+             "echo \"[/var/log/train.log]\" >> cwlogs.conf\n\n",
+
+             "echo \"file = /var/log/train.log\" >> cwlogs.conf\n",
+             "echo \"log_stream_name = syslog\" >> cwlogs.conf\n",
+             "echo \"log_group_name = train.log\" >> cwlogs.conf\n",
+             "echo \"datetime_format = %b %d %H:%M:%S\" >> cwlogs.conf\n",
+             "echo \"initial_position = start_of_file\" >> cwlogs.conf\n",
+
+             { "Fn::Sub" : "python3 ./awslogs-agent-setup.py --region ${AWS::Region} -n -c /tmp/cwlogs.conf\n"},
+
+             "LOG_FILE=/var/log/train.log\n",
+             "SCRIPT=/opt/automation/train.sh\n",
+             { "Fn::Sub" : "TRAIN_DIR=${CaffeTrainingDir}\n"},
+             { "Fn::Sub" : "SOLVER_FILE=\"$TRAIN_DIR/${CaffeSolverPrototxtFile}\"\n"},
+             { "Fn::Sub" : "SYNC_S3=\"s3://${TrainedModelsBucket}/object-detection/\"\n"},
+             "touch $LOG_FILE\n",
+             "chmod 666 $LOG_FILE\n",
+             "mkdir -p $(dirname $SCRIPT)\n",
+             "wget -O /tmp/train.sh https://raw.githubusercontent.com/PauloMigAlmeida/cloudformation_recipes/master/EC2/train.sh\n",
+             "mv /tmp/train.sh $SCRIPT\n",
+             "chmod +x $SCRIPT\n",
+             "(crontab -u ubuntu -l ; echo \"*/10 * * * * $SCRIPT $TRAIN_DIR $SOLVER_FILE $SYNC_S3 $LOG_FILE 2>&1 >> $LOG_FILE &\") | crontab -u ubuntu -\n"
+        ]]}}
+       }
+    },
+    "InstanceFleet": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "DependsOn": ["PublicRoute"],
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::GetAtt": [
+              "InstanceSubnet1",
+              "AvailabilityZone"
+            ]
+          },
+          {
+            "Fn::GetAtt": [
+              "InstanceSubnet2",
+              "AvailabilityZone"
+            ]
+          }
+        ],
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "InstanceSubnet1"
+          },
+          {
+            "Ref": "InstanceSubnet2"
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "LaunchConfig"
+        },
+        "MinSize": "1",
+        "MaxSize": "1",
+        "DesiredCapacity": "1",
+        "HealthCheckType" : "EC2",
+        "HealthCheckGracePeriod": 300,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "DL Spot Instance training :: Instance",
+            "PropagateAtLaunch" : "true"
+          }
+        ]
+      }
+    }
+  }
+}
